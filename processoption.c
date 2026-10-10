@@ -143,6 +143,13 @@ Int32 process_option(char* pChar) {
     else if (strncasecmp(option,"Height=",7) == 0) {
            screen_height = option_value(option);
            }
+    else if (strncasecmp(option,"Scale=",6) == 0) {
+           screen_scale = option_value(option);
+           }
+    else if (strncasecmp(option,"Font=",5) == 0) {
+           strncpy(font_name, option+5, 63);
+           font_name[63] = 0;
+           }
     else if (strncasecmp(option,"DowngradeDepth=",9) == 0) {
            downgrade_depth = option_value(option);
            if (downgrade_depth < 2) downgrade_depth = 2;

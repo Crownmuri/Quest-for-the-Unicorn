@@ -1073,6 +1073,8 @@ LINK char               auto_target;
 LINK Int32                levelCleared;
 LINK Int32                screen_width;
 LINK Int32                screen_height;
+LINK Int32                screen_scale;
+LINK char                 font_name[64];
 LINK Int32                TEXT_GRID_WIDTH;
 LINK Int32                TEXT_GRID_HEIGHT;
 LINK Int32                smap_offset_x;

@@ -276,6 +276,12 @@ LINK rcs_Event    rcs_pollEvent(rcs_Display*);
 LINK unsigned long rcs_RGBToPixel(int red, int green, int blue);
 LINK rcs_Window   rcs_rootWindow(rcs_Display* d);
 LINK void         rcs_setWindowName(rcs_Display*,rcs_Window,char*);
+#ifdef WIN32
+LINK void         rcs_setBacking(rcs_Display* d,rcs_Window win,rcs_Pixmap pixmap);
+LINK void         rcs_setScale(int scale);
+LINK void         rcs_setFont(const char* name);
+LINK void         rcs_useSmallFont(rcs_Display* d,rcs_GC gc);
+#endif
 LINK void         rcs_showWindow(rcs_Display* d,rcs_Window win);
 
 #endif

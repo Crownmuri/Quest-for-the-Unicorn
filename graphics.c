@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "graphics.h"
 
 #ifdef MINGW
@@ -64,6 +65,148 @@ Int32 _ctrlState;
 Int32 _capsState;
 
 #include "rgb.h"
+
+/* Everything is drawn 1:1 into the backing pixmap and then stretched */
+/* onto the real window by a whole number factor (rcs_scale).         */
+#define RCS_CHAR_WIDTH  8
+#define RCS_CELL_HEIGHT 19
+/* Callers position text for a font this size, y being the baseline */
+#define RCS_NOMINAL_HEIGHT 13
+#define RCS_NOMINAL_ASCENT 10
+Int32   rcs_scale = 1;
+HWND    _rcs_mainWin = NULL;
+HBITMAP _rcs_backing = NULL;
+HFONT   _rcs_font = NULL;
+HFONT   _rcs_smallFont = NULL;
+char    _rcs_fontName[LF_FACESIZE] = "";
+
+void rcs_setFont(const char* name) {
+  strncpy(_rcs_fontName,name,LF_FACESIZE-1);
+  _rcs_fontName[LF_FACESIZE-1] = 0;
+  }
+
+void rcs_setScale(Int32 scale) {
+  rcs_scale = scale;
+  }
+
+void rcs_setBacking(rcs_Display* d,rcs_Window win,rcs_Pixmap pixmap) {
+  _rcs_mainWin = win;
+  _rcs_backing = (HBITMAP)pixmap;
+  }
+
+/* Drawing aimed directly at the window is dropped, the window only */
+/* ever shows what is in the backing pixmap                          */
+Int32 _rcs_skip(rcs_Window win) {
+  return (_rcs_backing != NULL && win == _rcs_mainWin) ? TRUE : FALSE;
+  }
+
+void _rcs_blit(HDC wdc,Int32 x,Int32 y,Int32 w,Int32 h) {
+  HDC mdc;
+  HGDIOBJ old;
+  mdc=CreateCompatibleDC(wdc);
+  old=SelectObject(mdc,_rcs_backing);
+  if (rcs_scale == 1) BitBlt(wdc,x,y,w,h,mdc,x,y,SRCCOPY);
+  else {
+    SetStretchBltMode(wdc,COLORONCOLOR);
+    StretchBlt(wdc,x*rcs_scale,y*rcs_scale,w*rcs_scale,h*rcs_scale,
+               mdc,x,y,w,h,SRCCOPY);
+    }
+  SelectObject(mdc,old);
+  DeleteDC(mdc);
+  }
+
+void _rcs_present(rcs_Window win,Int32 x,Int32 y,Int32 w,Int32 h) {
+  HDC wdc;
+  if (_rcs_backing == NULL || win != (rcs_Window)_rcs_backing) return;
+  wdc=GetDC(_rcs_mainWin);
+  _rcs_blit(wdc,x,y,w,h);
+  ReleaseDC(_rcs_mainWin,wdc);
+  }
+
+/* The game lays text out on a grid of 8 pixel wide cells, so it needs */
+/* a fixed pitch font, the proportional SYSTEM_FONT does not fit.      */
+HFONT _rcs_tryFont(HDC dc,const char* face,Int32 height,Int32 charset) {
+  HFONT font;
+  char  name[LF_FACESIZE];
+  font=CreateFontA(height,RCS_CHAR_WIDTH,0,0,FW_NORMAL,
+                   FALSE,FALSE,FALSE,charset,
+                   OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                   NONANTIALIASED_QUALITY,FIXED_PITCH | FF_MODERN,face);
+  if (font == NULL) return NULL;
+  font=(HFONT)SelectObject(dc,font);
+  name[0]=0;
+  GetTextFaceA(dc,LF_FACESIZE,name);
+  font=(HFONT)SelectObject(dc,font);
+  if (lstrcmpiA(name,face) == 0) return font;
+  DeleteObject(font);
+  return NULL;
+  }
+
+HFONT _rcs_getFont() {
+  static const char* faces[] = { "Lucida Console","Consolas","Courier New",NULL };
+  static const Int32 heights[] = { 13,15,16 };
+  Int32 i,height;
+  HDC   dc;
+  HFONT font;
+  TEXTMETRIC tm;
+  if (_rcs_font != NULL) return _rcs_font;
+  dc=CreateCompatibleDC(0);
+  /* A font asked for by name, sized like the known ones where possible */
+  if (_rcs_fontName[0] != 0 && lstrcmpiA(_rcs_fontName,"Fixedsys") != 0) {
+    height=15;
+    for (i=0;faces[i] != NULL;i++)
+      if (lstrcmpiA(_rcs_fontName,faces[i]) == 0) height=heights[i];
+    _rcs_font=_rcs_tryFont(dc,_rcs_fontName,height,DEFAULT_CHARSET);
+    }
+  /* Default is Fixedsys, but only where it really is 8 pixels wide */
+  if (_rcs_font == NULL) {
+    font=(HFONT)GetStockObject(SYSTEM_FIXED_FONT);
+    font=(HFONT)SelectObject(dc,font);
+    GetTextMetrics(dc,&tm);
+    font=(HFONT)SelectObject(dc,font);
+    if (tm.tmAveCharWidth == RCS_CHAR_WIDTH && tm.tmHeight <= RCS_CELL_HEIGHT)
+      _rcs_font=font;
+    }
+  for (i=0;faces[i] != NULL && _rcs_font == NULL;i++)
+    _rcs_font=_rcs_tryFont(dc,faces[i],heights[i],DEFAULT_CHARSET);
+  DeleteDC(dc);
+  if (_rcs_font == NULL) _rcs_font=(HFONT)GetStockObject(SYSTEM_FIXED_FONT);
+  return _rcs_font;
+  }
+
+/* The map screen stacks its text lines 11 or 12 pixels apart, which */
+/* is too tight for Fixedsys, so that text gets a more compact font  */
+HFONT _rcs_getSmallFont() {
+  HDC   dc;
+  HFONT font;
+  TEXTMETRIC tm;
+  if (_rcs_smallFont != NULL) return _rcs_smallFont;
+  dc=CreateCompatibleDC(0);
+  font=(HFONT)SelectObject(dc,_rcs_getFont());
+  GetTextMetrics(dc,&tm);
+  SelectObject(dc,font);
+  if (tm.tmHeight <= RCS_NOMINAL_HEIGHT) _rcs_smallFont=_rcs_getFont();
+  if (_rcs_smallFont == NULL) {
+    font=_rcs_tryFont(dc,"Terminal",12,OEM_CHARSET);
+    if (font != NULL) {
+      font=(HFONT)SelectObject(dc,font);
+      GetTextMetrics(dc,&tm);
+      font=(HFONT)SelectObject(dc,font);
+      if (tm.tmAveCharWidth == RCS_CHAR_WIDTH && tm.tmHeight <= RCS_NOMINAL_HEIGHT)
+        _rcs_smallFont=font;
+      else DeleteObject(font);
+      }
+    }
+  if (_rcs_smallFont == NULL)
+    _rcs_smallFont=_rcs_tryFont(dc,"Lucida Console",13,DEFAULT_CHARSET);
+  DeleteDC(dc);
+  if (_rcs_smallFont == NULL) _rcs_smallFont=_rcs_getFont();
+  return _rcs_smallFont;
+  }
+
+void rcs_useSmallFont(rcs_Display* d,rcs_GC gc) {
+  gc->font=_rcs_getSmallFont();
+  }
 
 Int32 _rcs_winTranslate(Int32 key) {
         if (key >= 'A' && key <= 'Z') {
@@ -143,8 +286,22 @@ Int32 _rcs_isBitmap(rcs_Window w) {
   }
 
 LRESULT CALLBACK rcs_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+  PAINTSTRUCT ps;
+  HDC dc;
+  RECT rect;
   switch (message) {
                 case WM_DESTROY:PostQuitMessage(0);
+                                      break;
+                case WM_ERASEBKGND:if (_rcs_skip(hWnd)==TRUE) return 1;
+                                      break;
+                case WM_PAINT:if (_rcs_skip(hWnd)==TRUE) {
+                                dc=BeginPaint(hWnd,&ps);
+                                GetClientRect(hWnd,&rect);
+                                _rcs_blit(dc,0,0,rect.right/rcs_scale+1,
+                                                 rect.bottom/rcs_scale+1);
+                                EndPaint(hWnd,&ps);
+                                return 0;
+                                }
                                       break;
           default:return DefWindowProc(hWnd, message, wParam, lParam);
     }
@@ -154,6 +311,10 @@ LRESULT CALLBACK rcs_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
 void rcs_initWin32(HINSTANCE hInstance) {
         WNDCLASSEX wcex;
+        FARPROC dpiAware;
+  /* Without this Windows bitmap-stretches the window on scaled displays */
+  dpiAware = GetProcAddress(GetModuleHandle(TEXT("user32.dll")),"SetProcessDPIAware");
+  if (dpiAware != NULL) dpiAware();
   disp.hInstance=hInstance;
   strcpy(disp.className,"rcsawlib");
   disp.numPixmaps=0;
@@ -292,6 +453,10 @@ void rcs_copyArea(rcs_Display* d,rcs_Window src,rcs_Window dest,rcs_GC gc,Int32 
 #ifdef WIN32
   HDC dc;
   HDC ddc;
+  if (_rcs_skip(dest)==TRUE) {
+    _rcs_present((rcs_Window)_rcs_backing,dx,dy,w,h);
+    return;
+    }
   if (_rcs_isBitmap(src)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,src);
@@ -305,6 +470,7 @@ void rcs_copyArea(rcs_Display* d,rcs_Window src,rcs_Window dest,rcs_GC gc,Int32 
     else ReleaseDC(src,dc);
   if (_rcs_isBitmap(dest)==TRUE) DeleteDC(ddc);
     else ReleaseDC(dest,ddc);
+  _rcs_present(dest,dx,dy,w,h);
 #endif
   }
 
@@ -337,6 +503,12 @@ rcs_Pixmap rcs_createPixmap(rcs_Display* d,rcs_Window win,Int32 x,Int32 y) {
 /* ************************* */
 rcs_Window  rcs_createWindow(rcs_Display* d,rcs_Window parent,Int32 x,Int32 y,Int32 width,Int32 height) {
   rcs_Window ret;
+#ifdef WIN32
+  DWORD style;
+  RECT  rect;
+  RECT  work;
+  Int32 sx,sy;
+#endif
 #ifdef X
   unsigned long mask;
   XSetWindowAttributes attr;
@@ -357,9 +529,28 @@ rcs_Window  rcs_createWindow(rcs_Display* d,rcs_Window parent,Int32 x,Int32 y,In
 #ifdef WIN32
   
   if (parent == GetDesktopWindow()) {
-    width += 3;
-    height += 20;
-    ret = CreateWindow(d->className, "rcsawlib", WS_OVERLAPPEDWINDOW,
+    /* Fixed size window, the frame is added around the client area */
+    style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    SetRect(&rect,0,0,width,height);
+    AdjustWindowRect(&rect,style,FALSE);
+    if (SystemParametersInfo(SPI_GETWORKAREA,0,&work,0) == 0)
+      SetRect(&work,0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN));
+    if (rcs_scale < 1) {
+      /* Auto: largest whole multiple that still fits on the desktop */
+      sx = ((work.right-work.left) - ((rect.right-rect.left) - width)) / width;
+      sy = ((work.bottom-work.top) - ((rect.bottom-rect.top) - height)) / height;
+      rcs_scale = (sx < sy) ? sx : sy;
+      if (rcs_scale < 1) rcs_scale = 1;
+      }
+    SetRect(&rect,0,0,width*rcs_scale,height*rcs_scale);
+    AdjustWindowRect(&rect,style,FALSE);
+    width = rect.right-rect.left;
+    height = rect.bottom-rect.top;
+    x = work.left + ((work.right-work.left) - width) / 2;
+    y = work.top + ((work.bottom-work.top) - height) / 2;
+    if (x < work.left) x = work.left;
+    if (y < work.top) y = work.top;
+    ret = CreateWindow(d->className, "rcsawlib", style,
        x, y, width, height, NULL, NULL, d->hInstance, NULL);
     }
   else {
@@ -389,6 +580,7 @@ void rcs_drawFilledBox(rcs_Display* d,rcs_Window win,rcs_GC gc,
   rect.left=x;
   rect.bottom=y+h;
   rect.right=x+w;
+  if (_rcs_skip(win)==TRUE) return;
   if (_rcs_isBitmap(win)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,win);
@@ -402,6 +594,7 @@ void rcs_drawFilledBox(rcs_Display* d,rcs_Window win,rcs_GC gc,
   DeleteObject(brush);
   if (_rcs_isBitmap(win)==TRUE) DeleteDC(dc);
     else ReleaseDC(win,dc);
+  _rcs_present(win,x,y,w,h);
 #endif
   }
 
@@ -415,6 +608,7 @@ void rcs_drawLine(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 x1,Int32 y1,Int3
 #ifdef WIN32
   HDC dc;
   HPEN pen;
+  if (_rcs_skip(win)==TRUE) return;
   if (_rcs_isBitmap(win)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,win);
@@ -427,6 +621,7 @@ void rcs_drawLine(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 x1,Int32 y1,Int3
   DeleteObject(pen);
   if (_rcs_isBitmap(win)==TRUE) DeleteDC(dc);
     else ReleaseDC(win,dc);
+  _rcs_present(win,(x1<x2)?x1:x2,(y1<y2)?y1:y2,abs(x2-x1)+1,abs(y2-y1)+1);
 #endif
   }
 
@@ -452,6 +647,7 @@ void  rcs_drawPixmap(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 dx,Int32 dy,c
   _rcs_buildColors(d,colors,data,&none);
   sscanf(data[0],"%d %d %d %d",&sizeX,&sizeY,&numColors,&bytesPer);
 #ifdef WIN32
+  if (_rcs_skip(win)==TRUE) return;
   if (_rcs_isBitmap(win)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,win);
@@ -480,7 +676,8 @@ void  rcs_drawPixmap(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 dx,Int32 dy,c
 #ifdef WIN32
   if (_rcs_isBitmap(win)==TRUE) DeleteDC(dc);
     else ReleaseDC(win,dc);
-#endif    
+  _rcs_present(win,dx,dy,sizeX,sizeY);
+#endif
   }
 
 /* ********************** */
@@ -493,6 +690,7 @@ void rcs_drawPoint(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 x,Int32 y) {
 #ifdef WIN32
   HDC dc;
   HPEN pen;
+  if (_rcs_skip(win)==TRUE) return;
   if (_rcs_isBitmap(win)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,win);
@@ -505,6 +703,7 @@ void rcs_drawPoint(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 x,Int32 y) {
   DeleteObject(pen);
   if (_rcs_isBitmap(win)==TRUE) DeleteDC(dc);
     else ReleaseDC(win,dc);
+  _rcs_present(win,x,y,1,1);
 #endif
   }
 
@@ -518,30 +717,36 @@ void rcs_drawString(rcs_Display* d,rcs_Window win,rcs_GC gc,Int32 x,Int32 y,char
 #endif
 #ifdef WIN32
   HDC dc;
-  HPEN pen;
   RECT rect;
-  Int32  height;
-  rect.top=y;
-  rect.left=x;
-  rect.bottom=20;
-  rect.right=20;
+  TEXTMETRIC tm;
+  INT  dx[256];
+  Int32  i,len;
+  len=strlen(buffer);
+  if (len > 256) len=256;
+  if (len == 0) return;
+  if (_rcs_skip(win)==TRUE) return;
   if (_rcs_isBitmap(win)==TRUE) {
     dc=CreateCompatibleDC(0);
     SelectObject(dc,win);
     } else dc=GetDC(win);
-  pen=CreatePen(PS_SOLID,0,gc->foreground);
-  pen=(HPEN)SelectObject(dc,pen);
   SelectObject(dc,gc->font);
   SetBkColor(dc,gc->background);
   SetTextColor(dc,gc->foreground);
-  SetBkMode(dc,TRANSPARENT);
-  height=DrawText(dc,buffer,strlen(buffer),&rect,DT_CALCRECT);
-  rect.top-=height;
-  DrawText(dc,buffer,strlen(buffer),&rect,DT_TOP);
-  pen=(HPEN)SelectObject(dc,pen);
-  DeleteObject(pen);
+  SetBkMode(dc,(clr) ? OPAQUE : TRANSPARENT);
+  SetTextAlign(dc,TA_LEFT | TA_TOP | TA_NOUPDATECP);
+  GetTextMetrics(dc,&tm);
+  /* y is the baseline, same as X, taller fonts are centred on the same */
+  /* band.  Every character advances by exactly one cell so strings     */
+  /* line up with text placed a character at a time                     */
+  for (i=0;i<len;i++) dx[i]=RCS_CHAR_WIDTH;
+  rect.left=x;
+  rect.top=y-RCS_NOMINAL_ASCENT-(tm.tmHeight-RCS_NOMINAL_HEIGHT)/2;
+  rect.right=x+len*RCS_CHAR_WIDTH;
+  rect.bottom=rect.top+tm.tmHeight;
+  ExtTextOut(dc,x,rect.top,(clr) ? ETO_OPAQUE : 0,&rect,buffer,len,dx);
   if (_rcs_isBitmap(win)==TRUE) DeleteDC(dc);
     else ReleaseDC(win,dc);
+  _rcs_present(win,rect.left,rect.top,rect.right-rect.left,tm.tmHeight);
 #endif
   }
 
@@ -717,45 +922,45 @@ rcs_Event rcs_getEvent(rcs_Display* d) {
       ret.type=EVENT_MOTION;
       ret.window=msg.hwnd;
       ret.d1=1;
-      ret.d2=msg.lParam & 0xffff;
-      ret.d3=msg.lParam >> 16;
+      ret.d2=(msg.lParam & 0xffff) / rcs_scale;
+      ret.d3=(msg.lParam >> 16) / rcs_scale;
       }
     if (msg.message == WM_LBUTTONDOWN) {
       ret.type=EVENT_BUTTON_PRESS;
       ret.window=msg.hwnd;
       ret.d1=1;
-      ret.d2=msg.lParam & 0xffff;
-      ret.d3=msg.lParam >> 16;
+      ret.d2=(msg.lParam & 0xffff) / rcs_scale;
+      ret.d3=(msg.lParam >> 16) / rcs_scale;
       }
     else if (msg.message == WM_RBUTTONDOWN) {
       ret.type=EVENT_BUTTON_PRESS;
       ret.window=msg.hwnd;
       ret.d1=2;
-      ret.d2=msg.lParam & 0xffff;
-      ret.d3=msg.lParam >> 16;
+      ret.d2=(msg.lParam & 0xffff) / rcs_scale;
+      ret.d3=(msg.lParam >> 16) / rcs_scale;
       }
     else if (msg.message == WM_LBUTTONUP) {
       ret.type=EVENT_BUTTON_RELEASE;
       ret.window=msg.hwnd;
       ret.d1=1;
-      ret.d2=msg.lParam & 0xffff;
-      ret.d3=msg.lParam >> 16;
+      ret.d2=(msg.lParam & 0xffff) / rcs_scale;
+      ret.d3=(msg.lParam >> 16) / rcs_scale;
       }
     else if (msg.message == WM_RBUTTONUP) {
       ret.type=EVENT_BUTTON_RELEASE;
       ret.window=msg.hwnd;
       ret.d1=2;
-      ret.d2=msg.lParam & 0xffff;
-      ret.d3=msg.lParam >> 16;
+      ret.d2=(msg.lParam & 0xffff) / rcs_scale;
+      ret.d3=(msg.lParam >> 16) / rcs_scale;
       }
     else if (msg.message == WM_PAINT) {
       ret.type=EVENT_EXPOSE;
       ret.window=msg.hwnd;
       GetUpdateRect(ret.window,&rect,FALSE);
-      ret.d1=rect.left;
-      ret.d2=rect.top;
-      ret.d3=rect.right-rect.left;
-      ret.d4=rect.bottom-rect.top;
+      ret.d1=rect.left/rcs_scale;
+      ret.d2=rect.top/rcs_scale;
+      ret.d3=(rect.right+rcs_scale-1)/rcs_scale-ret.d1;
+      ret.d4=(rect.bottom+rcs_scale-1)/rcs_scale-ret.d2;
       ret.d5=0;
       }
     if (msg.message == WM_KEYDOWN) {
@@ -869,7 +1074,7 @@ rcs_GC rcs_openGC(rcs_Display* d,rcs_Window win) {
         ret=(rcs_GC)malloc(sizeof(struct _GC));
   ret->foreground=RGB(0,0,0);
   ret->background=RGB(255,255,255);
-  ret->font=(HFONT)GetStockObject(SYSTEM_FONT);
+  ret->font=_rcs_getFont();
   return ret;
 #endif
   }

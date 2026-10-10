@@ -55,6 +55,8 @@ Int32 main2(Int32 argc,char** argv) {
   date.tm_year += 1900;
   screen_width = 640;
   screen_height = 480;
+  screen_scale = 0;
+  strcpy(font_name,"");
   tile_width = 25;
   tile_height = 27;
   TEXT_GRID_WIDTH = 80;
@@ -128,6 +130,7 @@ Int32 main2(Int32 argc,char** argv) {
     }
   if (screen_width < 640) screen_width = 640;
   if (screen_height < 480) screen_height = 480;
+  if (screen_scale < 0) screen_scale = 0;
 #ifndef ASCII
   TILES_X = (screen_width - 240) / tile_width;
   TILES_Y = (screen_height - 48) / tile_height;
@@ -226,6 +229,7 @@ Int32 main2(Int32 argc,char** argv) {
     if (fkey_mode == 'W') printf("  Fkeys: Weapons\n");
     if (fkey_mode == 'G') printf("  Fkeys: Gear\n");
     printf("  Screen Size: %d x %d\n", screen_width, screen_height);
+    printf("  Screen Scale: %d\n", screen_scale);
     printf("Macros:\n");
     for (i=0; i<12; i++)
       printf("  F%d = %s\n",i+1,macros[i]);

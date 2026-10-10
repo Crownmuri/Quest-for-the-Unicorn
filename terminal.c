@@ -42,6 +42,13 @@ rcs_GC             gc;
 #include "header.h"
 #include "terminal.h"
 
+/* Baseline of text within a 19 pixel high text cell */
+#ifdef WIN32
+#define TEXT_BASELINE 13
+#else
+#define TEXT_BASELINE 10
+#endif
+
 char screen[80][25][2];
 char store[80][25][2];
 Int32  esc_mode;
@@ -233,11 +240,18 @@ void init_graph() {
   rcs_GC gc;
   display = rcs_openDisplay(":0.0");
   rcs_buildColorMapping(display);
+#ifdef WIN32
+  rcs_setScale(screen_scale);
+  rcs_setFont(font_name);
+#endif
   window = rcs_createWindow(display,rcs_rootWindow(display),0,0,screen_width,screen_height);
   rcs_showWindow(display,window);
   rcs_setWindowName(display,window,"Quest for the Unicorn");
   xscreen = rcs_createPixmap(display,window,screen_width,screen_height);
   screenSave = rcs_createPixmap(display,window,screen_width,screen_height);
+#ifdef WIN32
+  rcs_setBacking(display,window,xscreen);
+#endif
   gc = rcs_openGC(display,window);
   rcs_namedForeground(display,gc,"black");
   rcs_drawFilledBox(display,window,gc,0,0,screen_width,screen_height);
@@ -379,8 +393,8 @@ void txt_write(char* buffer) {
 //    rcs_drawString(display,xscreen,gc,cursor_x * 8,10+cursor_y * 19,b2,0);
     rcs_drawFilledBox(display,window,black,x*8,y*19,8,19);
     rcs_drawFilledBox(display,xscreen,black,x*8,y*19,8,19);
-    rcs_drawString(display,window,gc,x * 8,10+y * 19,b2,0);
-    rcs_drawString(display,xscreen,gc,x * 8,10+y * 19,b2,0);
+    rcs_drawString(display,window,gc,x * 8,TEXT_BASELINE+y * 19,b2,0);
+    rcs_drawString(display,xscreen,gc,x * 8,TEXT_BASELINE+y * 19,b2,0);
     cursor_x++;
     if (cursor_x == 80) {
       cursor_x = 0;
@@ -798,6 +812,9 @@ void outtext_xy(Int32 x,Int32 y,char* buffer) {
   rcs_GC gc;
   gc = rcs_openGC(display,window);
   gc_color(&gc,g_color);
+#ifdef WIN32
+  rcs_useSmallFont(display,gc);
+#endif
   rcs_drawString(display,window,gc,x*8,y*11,buffer,0);
   rcs_drawString(display,xscreen,gc,x*8,y*11,buffer,0);
   rcs_closeGC(display,gc);
@@ -817,6 +834,9 @@ void outtextxy(Int32 x,Int32 y,char* buffer) {
   rcs_GC gc;
   gc = rcs_openGC(display,window);
   gc_color(&gc,g_color);
+#ifdef WIN32
+  rcs_useSmallFont(display,gc);
+#endif
   rcs_drawString(display,window,gc,x,y,buffer,0);
   rcs_drawString(display,xscreen,gc,x,y,buffer,0);
   rcs_closeGC(display,gc);
@@ -836,6 +856,9 @@ void outtextxyclr(Int32 x,Int32 y,char* buffer) {
   rcs_GC gc;
   gc = rcs_openGC(display,window);
   gc_color(&gc,g_color);
+#ifdef WIN32
+  rcs_useSmallFont(display,gc);
+#endif
   rcs_drawString(display,window,gc,x,y,buffer,-1);
   rcs_drawString(display,xscreen,gc,x,y,buffer,-1);
   rcs_closeGC(display,gc);
